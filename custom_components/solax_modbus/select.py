@@ -1,9 +1,11 @@
 from .const import ATTR_MANUFACTURER, DOMAIN, CONF_MODBUS_ADDR, DEFAULT_MODBUS_ADDR
 from .const import WRITE_DATA_LOCAL, WRITE_MULTISINGLE_MODBUS, WRITE_SINGLE_MODBUS
+from .const import autorepeat_set, autorepeat_stop
 from homeassistant.components.select import PLATFORM_SCHEMA, SelectEntity
 from homeassistant.const import CONF_NAME
 from homeassistant.core import callback
 from typing import Any, Dict, Optional
+from time import time
 import logging
 
 _LOGGER = logging.getLogger(__name__)
@@ -78,7 +80,21 @@ class SolaXModbusSelect(SelectEntity):
         """Register callbacks."""
         await self._hub.async_add_solax_modbus_sensor(self)
 
+        # Restore autorepeat if this select has autorepeat enabled and was left in an active state
+        if self.entity_description.autorepeat:
+            current_value = self._hub.data.get(self._key)
+            if current_value:
+                payload = self.entity_description.reverse_option_dict.get(current_value)
+                ignore_values = self.entity_description.autorepeat_ignore_values or []
+                if payload is not None and payload not in ignore_values:
+                    _LOGGER.info(f"{self._platform_name}: Restoring autorepeat for {self._key} = {current_value} (value {payload})")
+                    # Set autorepeat to far future (effectively infinite) using 10 years
+                    autorepeat_set(self._hub.data, self._key, time() + (10 * 365 * 24 * 60 * 60))
+
     async def async_will_remove_from_hass(self) -> None:
+        # Stop autorepeat if this select has it enabled
+        if self.entity_description.autorepeat:
+            autorepeat_stop(self._hub.data, self._key)
         await self._hub.async_remove_solax_modbus_sensor(self)
 
 
@@ -120,4 +136,17 @@ class SolaXModbusSelect(SelectEntity):
             _LOGGER.info(f"*** local data written {self._key}: {payload}")
             self._hub.localsUpdated = True # mark to save permanently
         self._hub.data[self._key] = option
+
+        # Handle autorepeat for selects that have it enabled
+        # This ensures the command is resent every polling cycle when needed (e.g., to prevent inverter timeout)
+        if self.entity_description.autorepeat:
+            ignore_values = self.entity_description.autorepeat_ignore_values or []
+            if payload is not None and payload not in ignore_values:
+                _LOGGER.info(f"{self._platform_name}: Starting autorepeat for {self._key} = {option} (value {payload})")
+                # Set autorepeat to far future (effectively infinite) using 10 years
+                autorepeat_set(self._hub.data, self._key, time() + (10 * 365 * 24 * 60 * 60))
+            else:
+                _LOGGER.info(f"{self._platform_name}: Stopping autorepeat for {self._key} = {option}")
+                autorepeat_stop(self._hub.data, self._key)
+
         self.async_write_ha_state()

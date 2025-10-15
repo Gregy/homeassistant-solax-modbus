@@ -999,6 +999,8 @@ SELECT_TYPES = [
         },
         allowedtypes=HYBRID | X3,
         icon="mdi:dip-switch",
+        autorepeat=True,
+        autorepeat_ignore_values=[0],  # Don't autorepeat when "Off" (value 0)
     ),
     SolisModbusSelectEntityDescription(
         name="Energy Storage Control Switch",

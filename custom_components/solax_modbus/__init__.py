@@ -1109,42 +1109,63 @@ class SolaXModbusHub:
                 await self.async_write_register(self._modbus_addr, addr, val)
             self.writequeue = {}  # make sure we do not write multiple times
 
-        # execute autorepeat buttons
+        # execute autorepeat buttons and selects
         self.last_ts = time()
         for (
             k,
             v,
         ) in list(self.data["_repeatUntil"].items()): # use a list copy because dict may change during iteration
-            buttondescr = self.computedButtons[k]
+            buttondescr = self.computedButtons.get(k)
+            selectentity = self.selectEntities.get(k)
+            
             if self.last_ts < v:
-                payload = buttondescr.value_function(BUTTONREPEAT_LOOP, buttondescr, self.data) # initval = 1 means autorepeat run
-                if payload:
-                    reg = payload.get("register", buttondescr.register)
-                    action = payload.get("action")
-                    if not action: __LOGGER.error(f"autorepeat value function for {k} must return dict containing action")
-                    else:
-                        if action == WRITE_MULTI_MODBUS:
-                            _LOGGER.debug(f"**debug** ready to repeat button {k} data: {payload}")
-                            await self.async_write_registers_multi(
+                # Handle button autorepeat (uses value_function)
+                if buttondescr:
+                    payload = buttondescr.value_function(BUTTONREPEAT_LOOP, buttondescr, self.data) # initval = 1 means autorepeat run
+                    if payload:
+                        reg = payload.get("register", buttondescr.register)
+                        action = payload.get("action")
+                        if not action: __LOGGER.error(f"autorepeat value function for {k} must return dict containing action")
+                        else:
+                            if action == WRITE_MULTI_MODBUS:
+                                _LOGGER.debug(f"**debug** ready to repeat button {k} data: {payload}")
+                                await self.async_write_registers_multi(
+                                    unit=self._modbus_addr,
+                                    address=reg,
+                                    payload=payload.get('data'),
+                                )
+                # Handle select autorepeat (simply resends current value)
+                elif selectentity:
+                    select_descr = selectentity.entity_description
+                    current_option = self.data.get(k)
+                    if current_option and hasattr(select_descr, 'reverse_option_dict'):
+                        payload = select_descr.reverse_option_dict.get(current_option)
+                        if payload is not None:
+                            _LOGGER.debug(f"Repeating select {k} register {select_descr.register} value {payload}")
+                            await self.async_write_register(
                                 unit=self._modbus_addr,
-                                address=reg,
-                                payload=payload.get('data'),
+                                address=select_descr.register,
+                                payload=payload
                             )
             else: # expired autorepeats
                 if self.data["_repeatUntil"][k] > 0: # expired recently
                     self.data["_repeatUntil"][k] = 0 # mark as finally expired, no further buttonrepeat post after this one
-                    _LOGGER.info(f"calling final value function POST for {k} with initval {BUTTONREPEAT_POST}")
-                    payload = buttondescr.value_function(BUTTONREPEAT_POST, buttondescr, self.data)  # None means no final call after expiration
-                    if payload:
-                        reg = payload.get("register", buttondescr.register)
-                        action = payload.get("action")
-                        if action == WRITE_MULTI_MODBUS:
-                            _LOGGER.info(f"terminating loop {k} - ready to send final payload data: {payload}")
-                            await self.async_write_registers_multi(
-                                unit=self._modbus_addr,
-                                address=reg,
-                                payload=payload.get('data'),
-                            )
+                    # Only buttons have POST actions, selects don't need cleanup
+                    if buttondescr:
+                        _LOGGER.info(f"calling final value function POST for {k} with initval {BUTTONREPEAT_POST}")
+                        payload = buttondescr.value_function(BUTTONREPEAT_POST, buttondescr, self.data)  # None means no final call after expiration
+                        if payload:
+                            reg = payload.get("register", buttondescr.register)
+                            action = payload.get("action")
+                            if action == WRITE_MULTI_MODBUS:
+                                _LOGGER.info(f"terminating loop {k} - ready to send final payload data: {payload}")
+                                await self.async_write_registers_multi(
+                                    unit=self._modbus_addr,
+                                    address=reg,
+                                    payload=payload.get('data'),
+                                )
+                    elif selectentity:
+                        _LOGGER.info(f"autorepeat for select {k} expired")
         return res
 
 
