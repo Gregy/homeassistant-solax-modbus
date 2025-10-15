@@ -121,6 +121,17 @@ def mutate_bit_in_register(bit: int, state: int, descr: str, datadict: dict):
     return new_value
 
 
+def value_function_battery_control_override(initval, descr, datadict):
+    """Value function for battery_control_override autorepeat - resends force charge/discharge commands."""
+    current_option = datadict.get(descr.key)
+    if current_option and hasattr(descr, 'reverse_option_dict'):
+        payload = descr.reverse_option_dict.get(current_option)
+        # Only repeat for force charge (1) and force discharge (2), not for off (0)
+        if payload in (1, 2):
+            return {'action': WRITE_SINGLE_MODBUS, 'register': descr.register, 'payload': payload}
+    return None
+
+
 def value_function_timingmode(initval, descr, datadict):
     return [
         (
@@ -730,6 +741,23 @@ NUMBER_TYPES = [
         icon="mdi:battery-sync",
     ),
     SolisModbusNumberEntityDescription(
+        name="Battery control override duration",
+        key="battery_control_override_duration",
+        unit=REGISTER_U16,
+        fmt="i",
+        initvalue=315360000,  # 10 years in seconds (effectively infinite)
+        native_min_value=60,
+        native_max_value=315360000,
+        native_step=1,
+        allowedtypes=HYBRID & X3,
+        write_method=WRITE_DATA_LOCAL,
+        entity_category=EntityCategory.CONFIG,
+        icon="mdi:timer",
+        native_unit_of_measurement=UnitOfTime.SECONDS,
+        prevent_update=True,
+        entity_registry_enabled_default=False,
+    ),
+    SolisModbusNumberEntityDescription(
         name="Battery control override charge power",
         key="battery_control_override_charge_power",
         register=43136,
@@ -999,6 +1027,8 @@ SELECT_TYPES = [
         },
         allowedtypes=HYBRID | X3,
         icon="mdi:dip-switch",
+        value_function=value_function_battery_control_override,
+        autorepeat="battery_control_override_duration",
     ),
     SolisModbusSelectEntityDescription(
         name="Energy Storage Control Switch",
